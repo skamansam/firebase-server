@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 'use strict';
 
 var fs = require('fs');
@@ -14,7 +12,8 @@ cli.parse({
 	data: ['d', 'JSON data to bootstrap the server with', 'string', '{}'],
 	file: ['f', 'JSON file to bootstrap the server with', 'file'],
 	rules: ['r', 'JSON file with security rules to load', 'file'],
-	secret: ['s', 'Shared client auth token secret', 'string']
+	secret: ['s', 'Shared client auth token secret', 'string'],
+	secure: ['h', 'Use Secure Web Sockets (wss://)', 'string'],
 });
 
 cli.main(function (args, options) {

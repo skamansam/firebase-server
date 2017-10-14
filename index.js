@@ -15,6 +15,8 @@ var Promise = require('any-promise');
 var firebase = require('firebase');
 var targaryen = require('targaryen');
 var _log = require('debug')('firebase-server');
+var https = require('https');
+var pem = require('pem');
 
 // In order to produce new Firebase clients that do not conflict with existing
 // instances of the Firebase client, each one must have a unique name.
@@ -54,7 +56,22 @@ function normalizePath(fullPath) {
 	};
 }
 
-function FirebaseServer(portOrOptions, name, data) {
+function determinePort(portOrOptions) {
+	var port = portOrOptions;
+	if (typeof portOrOptions === 'object'){
+		if (portOrOptions.server) {
+			var address = portOrOptions.server.address();
+			if (address) {
+				port = address.port;
+			}
+		} else {
+			port = portOrOptions.port;
+		}
+	}
+	return port;
+}
+
+function FirebaseServer(portOrOptions, name, data, useSecureServer) {
 	this.name = name || 'mock.firebase.server';
 
 	// Firebase is more than just a "database" now; the "realtime database" is
@@ -88,29 +105,33 @@ function FirebaseServer(portOrOptions, name, data) {
 		}
 	}, data);
 
-	var port = portOrOptions;
-	if (typeof portOrOptions === 'object') {
-		this._wss = new WebSocketServer(portOrOptions);
-		if (portOrOptions.server) {
-			var address = portOrOptions.server.address();
-			if (address) {
-				port = address.port;
-			}
-		} else {
-			port = portOrOptions.port;
-		}
-	} else {
-		this._wss = new WebSocketServer({
-			port: portOrOptions
-		});
-		port = portOrOptions;
+	var options = portOrOptions;
+	if (typeof portOrOptions !== 'object') {
+		options = { port: portOrOptions };
 	}
 
-	this._clock = new TestableClock();
-	this._tokenValidator = new TokenValidator(null, this._clock);
+	this.createServer = function(){
+		this._wss =  new WebSocketServer(options);
+		this._clock = new TestableClock();
+		this._tokenValidator = new TokenValidator(null, this._clock);
 
-	this._wss.on('connection', this.handleConnection.bind(this));
-	_log('Listening for connections on port ' + port);
+		this._wss.on('connection', this.handleConnection.bind(this));
+		_log('Listening for connections on port ' + determinePort());
+	};
+
+	if (options.secure) {
+		pem.createCertificate({ days: 1, selfSigned: true }, function (err, keys) {
+			if (err) {
+				throw err;
+			}
+			options.key = keys.serviceKey;
+			options.cert = keys.certificate;
+			options.server = https.createServer({ key: keys.serviceKey, cert: keys.certificate });
+			this.createServer();
+		});
+	} else {
+		this.createServer();
+	}
 }
 
 FirebaseServer.prototype = {
@@ -153,11 +174,11 @@ FirebaseServer.prototype = {
 		}
 
 		function pushData(path, data) {
-			send({d: {a: 'd', b: {p: path, d: data}}, t: 'd'});
+			send({ d: { a: 'd', b: { p: path, d: data } }, t: 'd' });
 		}
 
 		function permissionDenied(requestId) {
-			send({d: {r: requestId, b: {s: 'permission_denied', d: 'Permission denied'}}, t: 'd'});
+			send({ d: { r: requestId, b: { s: 'permission_denied', d: 'Permission denied' } }, t: 'd' });
 		}
 
 		function replaceServerTimestamp(data) {
@@ -214,7 +235,7 @@ FirebaseServer.prototype = {
 				pushData(path, snap.exportVal());
 				if (sendOk) {
 					sendOk = false;
-					send({d: {r: requestId, b: {s: 'ok', d: {}}}, t: 'd'});
+					send({ d: { r: requestId, b: { s: 'ok', d: {} } }, t: 'd' });
 				}
 			});
 		}
@@ -233,7 +254,7 @@ FirebaseServer.prototype = {
 			}
 
 			fbRef.update(newData);
-			send({d: {r: requestId, b: {s: 'ok', d: {}}}, t: 'd'});
+			send({ d: { r: requestId, b: { s: 'ok', d: {} } }, t: 'd' });
 		}
 
 		function handleSet(requestId, normalizedPath, fbRef, newData, hash) {
@@ -269,7 +290,7 @@ FirebaseServer.prototype = {
 					var calculatedHash = firebaseHash(snap.exportVal());
 					if (hash !== calculatedHash) {
 						pushData(path, snap.exportVal());
-						send({d: {r: requestId, b: {s: 'datastale', d: 'Transaction hash does not match'}}, t: 'd'});
+						send({ d: { r: requestId, b: { s: 'datastale', d: 'Transaction hash does not match' } }, t: 'd' });
 						throw new Error('Transaction hash does not match: ' + hash + ' !== ' + calculatedHash);
 					}
 				});
@@ -278,28 +299,28 @@ FirebaseServer.prototype = {
 			progress.then(function () {
 				fbRef.set(newData);
 				fbRef.once('value', function (snap) {
-					send({d: {r: requestId, b: {s: 'ok', d: {}}}, t: 'd'});
+					send({ d: { r: requestId, b: { s: 'ok', d: {} } }, t: 'd' });
 				});
 			}).catch(_log);
 		}
 
 		function handleAuth(requestId, credential) {
 			if (server._authSecret === credential) {
-				return send({t: 'd', d: {r: requestId, b: {s: 'ok', d: TokenValidator.normalize({ auth: null, admin: true, exp: null }) }}});
+				return send({ t: 'd', d: { r: requestId, b: { s: 'ok', d: TokenValidator.normalize({ auth: null, admin: true, exp: null }) } } });
 			}
 
 			try {
 				var decoded = server._tokenValidator.decode(credential);
 				authToken = credential;
-				return send({t: 'd', d: {r: requestId, b: {s: 'ok', d: TokenValidator.normalize(decoded)}}});
+				return send({ t: 'd', d: { r: requestId, b: { s: 'ok', d: TokenValidator.normalize(decoded) } } });
 			} catch (e) {
-				return send({t: 'd', d: {r: requestId, b: {s: 'invalid_token', d: 'Could not parse auth token.'}}});
+				return send({ t: 'd', d: { r: requestId, b: { s: 'invalid_token', d: 'Could not parse auth token.' } } });
 			}
 		}
 
-		function accumulateFrames(data){
+		function accumulateFrames(data) {
 			//Accumulate buffer until websocket frame is complete
-			if (typeof ws.frameBuffer == 'undefined'){
+			if (typeof ws.frameBuffer == 'undefined') {
 				ws.frameBuffer = '';
 			}
 
@@ -307,7 +328,7 @@ FirebaseServer.prototype = {
 				var parsed = JSON.parse(ws.frameBuffer + data);
 				ws.frameBuffer = '';
 				return parsed;
-			} catch(e) {
+			} catch (e) {
 				ws.frameBuffer += data;
 			}
 
@@ -345,7 +366,7 @@ FirebaseServer.prototype = {
 			}
 		}.bind(this));
 
-		send({d: {t: 'h', d: {ts: new Date().getTime(), v: '5', h: this.name, s: ''}}, t: 'c'});
+		send({ d: { t: 'h', d: { ts: new Date().getTime(), v: '5', h: this.name, s: '' } }, t: 'c' });
 	},
 
 	setRules: function (rules) {
@@ -386,6 +407,10 @@ FirebaseServer.prototype = {
 	setAuthSecret: function (newSecret) {
 		this._authSecret = newSecret;
 		this._tokenValidator.setSecret(newSecret);
+	},
+
+	setSecret: function (useSecure) {
+		this._useSecure = useSecure;
 	}
 };
 
