@@ -7,7 +7,7 @@
 'use strict';
 
 var _ = require('lodash');
-var WebSocketServer = require('ws').Server;
+var WebSocket = require('ws');
 var firebaseHash = require('./lib/firebaseHash');
 var TestableClock = require('./lib/testable-clock');
 var TokenValidator = require('./lib/token-validator');
@@ -105,32 +105,38 @@ function FirebaseServer(portOrOptions, name, data, useSecureServer) {
 		}
 	}, data);
 
-	var options = portOrOptions;
+	this.options = portOrOptions;
 	if (typeof portOrOptions !== 'object') {
-		options = { port: portOrOptions };
+		this.options = { port: portOrOptions };
 	}
 
-	this.createServer = function(){
-		this._wss =  new WebSocketServer(options);
+	this.createServer = function(serverOptions){
+		serverOptions.verifyClient = function(info) {
+			return true;
+		}
+		this._wss =  new WebSocket.Server(serverOptions);
 		this._clock = new TestableClock();
 		this._tokenValidator = new TokenValidator(null, this._clock);
 
 		this._wss.on('connection', this.handleConnection.bind(this));
-		_log('Listening for connections on port ' + determinePort());
+		_log('Listening for connections on port ' + determinePort(this.options));
 	};
 
-	if (options.secure) {
+	if (this.options.secure) {
 		pem.createCertificate({ days: 1, selfSigned: true }, function (err, keys) {
-			if (err) {
-				throw err;
-			}
-			options.key = keys.serviceKey;
-			options.cert = keys.certificate;
-			options.server = https.createServer({ key: keys.serviceKey, cert: keys.certificate });
-			this.createServer();
-		});
+			if (err) { throw err; }
+			const server  = https.createServer({ key: keys.serviceKey, cert: keys.certificate }, function(){console.log('GO!')});
+
+			server.listen(this.options.port, () => new WebSocket("wss://localhost:" + this.options.port, {
+				rejectUnauthorized: false
+			  }));
+			this.options.server = server
+			this.createServer({
+				server: server
+			});
+		}.bind(this));
 	} else {
-		this.createServer();
+	 	this.createServer(this.options);
 	}
 }
 

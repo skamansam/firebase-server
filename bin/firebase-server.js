@@ -13,7 +13,7 @@ cli.parse({
 	file: ['f', 'JSON file to bootstrap the server with', 'file'],
 	rules: ['r', 'JSON file with security rules to load', 'file'],
 	secret: ['s', 'Shared client auth token secret', 'string'],
-	secure: ['h', 'Use Secure Web Sockets (wss://)', 'string'],
+	secure: ['h', 'Use Secure Web Sockets (wss://)'],
 });
 
 cli.main(function (args, options) {
